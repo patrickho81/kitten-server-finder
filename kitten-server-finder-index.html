@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#171923">
+  <title>Kitten Server Finder</title>
+  <style>
+    :root { color-scheme: dark; --bg:#10131b; --panel:#1b2130; --line:#30394c; --muted:#aab4c5; --accent:#8bcbff; --good:#a5e6b2; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:24px 14px 48px; background:var(--bg); color:#f4f6fb; font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    main { max-width:850px; margin:0 auto; }
+    header { margin-bottom:20px; }
+    h1 { margin:0 0 5px; font-size:clamp(1.55rem,4vw,2.15rem); }
+    .sub,.muted { color:var(--muted); }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; margin:14px 0; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    button,.join { border:0; border-radius:10px; padding:11px 15px; font:600  .96rem system-ui; cursor:pointer; text-decoration:none; display:inline-flex; justify-content:center; align-items:center; }
+    button { background:#34445f; color:white; }
+    button.primary,.join { background:#2878c7; color:white; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:14px; }
+    .stat { background:#131a27; border-radius:12px; padding:12px; min-width:0; }
+    .stat strong { display:block; font-size:1.35rem; }
+    .stat span { color:var(--muted); font-size:.83rem; }
+    .server { display:flex; gap:12px; align-items:center; justify-content:space-between; border-top:1px solid var(--line); padding:13px 0; }
+    .server:first-child { border-top:0; }
+    .server-info { min-width:0; }
+    .server-name { font-weight:700; }
+    .server-meta { color:var(--muted); font-size:.88rem; }
+    .pill { display:inline-block; margin-left:7px; border-radius:999px; padding:2px 8px; background:#203b32; color:var(--good); font-size:.75rem; font-weight:700; vertical-align:2px; }
+    .join { white-space:nowrap; min-width:84px; }
+    #status { margin-top:12px; color:var(--muted); font-size:.9rem; }
+    .notice { color:var(--muted); font-size:.86rem; }
+    a.textlink { color:var(--accent); }
+    @media(max-width:520px) {
+      body { padding:18px 10px 36px; }
+      .stats { grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+      .stat { padding:9px; }
+      .stat strong { font-size:1.15rem; }
+      .server { align-items:flex-start; }
+      .join { padding:10px 11px; min-width:72px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🐱 Kitten Server Finder</h1>
+    <div class="sub">Break and Steal A Kitty Egg · Public servers sorted by fewest players</div>
+  </header>
+
+  <section class="panel">
+    <div class="toolbar">
+      <button id="refresh" class="primary">↻ Refresh servers</button>
+      <span id="updated" class="muted">Not loaded yet</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><strong id="serverCount">—</strong><span>Servers listed</span></div>
+      <div class="stat"><strong id="playerCount">—</strong><span>Players in listed servers</span></div>
+      <div class="stat"><strong id="lowest">—</strong><span>Fewest players</span></div>
+    </div>
+    <div id="status" role="status">Press Refresh servers to load the current public server list.</div>
+  </section>
+
+  <section class="panel">
+    <div class="toolbar" style="justify-content:space-between">
+      <strong>Available servers</strong>
+      <span class="muted" id="sortLabel">Fewest players first</span>
+    </div>
+    <div id="servers" style="margin-top:8px">
+      <p class="muted">No server data loaded.</p>
+    </div>
+  </section>
+
+  <section class="panel notice">
+    <strong>Notes</strong>
+    <p>This page reads public Roblox server information. Roblox's API does not provide browser access directly on all origins, so this starter page uses the public CORS relay at <code>proxy.cors.dev</code>. Do not enter your Roblox password, cookie, or other account credentials here.</p>
+    <p>The list is the first page returned by Roblox (up to 100 servers), then sorted by player count in this page. It may not include every server in a very large game. A server can fill up or close between refresh and join.</p>
+    <p>If the Join button does not open Roblox, use the normal Roblox app/browser and try again. Roblox may ask you to confirm opening the app.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const PLACE_ID = "88139827763026";
+  const API = `https://games.roblox.com/v1/games/${PLACE_ID}/servers/Public?limit=100&sortOrder=Asc&excludeFullGames=true`;
+  const RELAY = "https://proxy.cors.dev/";
+  const refreshButton = document.getElementById("refresh");
+  const serversElement = document.getElementById("servers");
+  const statusElement = document.getElementById("status");
+  const updatedElement = document.getElementById("updated");
+  let lastRefresh = 0;
+
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+  }[ch]));
+
+  function setStatus(message, isError=false) {
+    statusElement.textContent = message;
+    statusElement.style.color = isError ? "#ffaaaa" : "";
+  }
+
+  function makeJoinUrl(jobId) {
+    return `roblox://experiences/start?placeId=${PLACE_ID}&gameInstanceId=${encodeURIComponent(jobId)}`;
+  }
+
+  async function loadServers() {
+    const now = Date.now();
+    const waitMs = 60000 - (now - lastRefresh);
+    if (lastRefresh && waitMs > 0) {
+      setStatus(`Please wait ${Math.ceil(waitMs / 1000)} seconds before refreshing again.`);
+      return;
+    }
+
+    refreshButton.disabled = true;
+    refreshButton.textContent = "Loading…";
+    setStatus("Contacting Roblox for public servers…");
+
+    try {
+      const response = await fetch(RELAY + API, { method: "GET", cache: "no-store" });
+      if (!response.ok) throw new Error(`Request failed (${response.status}). The Roblox API or relay may be temporarily unavailable.`);
+      const result = await response.json();
+      if (!Array.isArray(result.data)) throw new Error("The response did not contain a server list.");
+
+      const servers = result.data
+        .filter(s => s && s.id && Number.isFinite(Number(s.playing)))
+        .sort((a,b) => Number(a.playing) - Number(b.playing));
+
+      document.getElementById("serverCount").textContent = servers.length;
+      document.getElementById("playerCount").textContent = servers.reduce((sum,s) => sum + Number(s.playing || 0), 0);
+      document.getElementById("lowest").textContent = servers.length ? Number(servers[0].playing) : "0";
+
+      if (!servers.length) {
+        serversElement.innerHTML = '<p class="muted">No public servers were returned. The game may have no public servers, or Roblox may have limited the response.</p>';
+      } else {
+        serversElement.innerHTML = servers.map((s,i) => {
+          const count = Number(s.playing || 0);
+          const max = Number(s.maxPlayers || 0);
+          const label = count <= 2 ? '<span class="pill">Low population</span>' : '';
+          const ping = Number.isFinite(Number(s.ping)) && s.ping ? `${Math.round(Number(s.ping))} ms ping` : '';
+          const fps = Number.isFinite(Number(s.fps)) && s.fps ? `${Number(s.fps).toFixed(0)} FPS` : '';
+          const extra = [ping, fps].filter(Boolean).join(" · ");
+          return `<div class="server">
+            <div class="server-info">
+              <div class="server-name">Server ${i+1}${label}</div>
+              <div class="server-meta">${count} / ${max || "?"} players${extra ? " · " + esc(extra) : ""}</div>
+            </div>
+            <a class="join" href="${esc(makeJoinUrl(s.id))}" rel="noopener">Join</a>
+          </div>`;
+        }).join("");
+      }
+
+      lastRefresh = Date.now();
+      updatedElement.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      setStatus(`Loaded ${servers.length} public servers. Sorted from fewest to most players.`);
+    } catch (error) {
+      setStatus(`${error.message} You can also test the API URL directly in Postman.`, true);
+      serversElement.innerHTML = '<p class="muted">Could not load servers. Try again later.</p>';
+    } finally {
+      refreshButton.disabled = false;
+      refreshButton.textContent = "↻ Refresh servers";
+    }
+  }
+
+  refreshButton.addEventListener("click", loadServers);
+})();
+</script>
+</body>
+</html>
